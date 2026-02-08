@@ -104,4 +104,31 @@ with col_right:
 
         if not st.session_state.is_recording:
             if st.button("🔴 録音開始"):
-                webrtc_
+                webrtc_ctx.audio_processor.frames = []
+                webrtc_ctx.audio_processor.is_recording = True
+                st.session_state.is_recording = True
+                st.rerun()
+        else:
+            if st.button("⏹️ 録音を停止して保存"):
+                webrtc_ctx.audio_processor.is_recording = False
+                st.session_state.is_recording = False
+                frames = webrtc_ctx.audio_processor.frames
+                if frames:
+                    buf = io.BytesIO()
+                    with wave.open(buf, "wb") as wf:
+                        wf.setnchannels(1)
+                        wf.setsampwidth(2)
+                        wf.setframerate(48000)
+                        wf.writeframes(b"".join(frames))
+                    st.session_state.last_audio = buf.getvalue()
+                st.rerun()
+            st.warning("現在録音中です...")
+    else:
+        st.info("Startを押して入室してください")
+
+# --- 6. 録音再生エリア ---
+if "last_audio" in st.session_state and st.session_state.last_audio:
+    st.divider()
+    st.subheader("📥 録音済み音声の再生")
+    st.audio(st.session_state.last_audio, format="audio/wav")
+    st.download_button("WAVファイルをダウンロード", st.session_state.last_audio, file_name="rec.wav")
