@@ -5,7 +5,7 @@ from streamlit_autorefresh import st_autorefresh
 
 # --- 1. 画面の自動更新設定 (0.1秒ごとに再描画) ---
 # これにより、ユーザーが何もしなくてもメーターがリアルタイムで動きます
-st_autorefresh(interval=100, key="volumemonitor")
+st_autorefresh(interval=500, key="volumemonitor")
 
 st.title("🎤 リアルタイム・ボイスチャット (安定版)")
 st.caption("接続設定を強化しました。ネットワークの壁を越えやすくしています。")
