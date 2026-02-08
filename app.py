@@ -1,27 +1,33 @@
 import streamlit as st
 from streamlit_webrtc import webrtc_streamer, WebRtcMode
 
-st.title("音声疎通テスト")
+st.title("音声疎通テスト（安定重視版）")
 
-# 接続設定
+# streamlit-webrtcの起動
 webrtc_ctx = webrtc_streamer(
-    key="test-connection",
-    mode=WebRtcMode.SENDRECV, # 自分の声を自分で聞くループバック
+    key="stable-test",
+    mode=WebRtcMode.SENDRECV,
     rtc_configuration={
         "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
     },
-    media_stream_constraints={
-        "audio": True,
-        "video": False,
-    },
+    media_stream_constraints={"audio": True, "video": False},
 )
 
-# 状態をテキストで表示（どこで止まっているか特定する）
-status = st.empty()
+# エラーが出る「webrtc_ctx.state.signalling_state」へのアクセスを完全に削除
+# 代わりに、再生中かどうかだけを「安全な方法」でチェックします
 
-if webrtc_ctx.state.playing:
-    status.success("✅ 実行中：声を出してスピーカーから聞こえるか確認してください。")
-elif webrtc_ctx.state.signalling_state:
-    status.warning(f"⏳ 接続準備中... (状態: {webrtc_ctx.state.signalling_state})")
+is_playing = False
+if webrtc_ctx is not None:
+    try:
+        # stateが存在し、かつplaying属性がある場合のみ取得
+        if hasattr(webrtc_ctx, "state") and webrtc_ctx.state is not None:
+            is_playing = getattr(webrtc_ctx.state, "playing", False)
+    except AttributeError:
+        # 万が一エラーが起きても無視して進む
+        pass
+
+if is_playing:
+    st.success("✅ 通信が確立されました！声を出してみてください。")
 else:
-    status.info("❄️ Startボタンを押してください。")
+    st.info("下の『Start』ボタンを押してマイクを許可してください。")
+    st.caption("※Startを押したあと、画面のどこかを一度クリックすると音が出やすくなります。")
