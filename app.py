@@ -10,7 +10,7 @@ import wave
 st.set_page_config(page_title="Voice Room Pro", layout="wide", page_icon="🎙️")
 st_autorefresh(interval=500, key="vitals")
 
-# モダンなUIデザイン
+# CSSデザイン
 st.markdown("""
     <style>
     .main { background-color: #f0f2f6; }
@@ -21,22 +21,20 @@ st.markdown("""
         background-color: #e1e4e8;
         font-weight: bold;
         color: #2c3e50;
+        display: inline-block;
+        margin-bottom: 10px;
     }
-    .room-label {
-        font-size: 24px;
-        font-weight: bold;
-        color: #1f77b4;
-    }
+    .room-label { font-size: 24px; font-weight: bold; color: #1f77b4; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. オーディオプロセッサ (軽量版) ---
+# --- 2. オーディオプロセッサ ---
 class ProAudioProcessor(AudioProcessorBase):
     def __init__(self):
         self.amplitude = 0
         self.is_recording = False
         self.frames = []
-        self.count = 0 # 内部処理用
+        self.count = 0 
 
     def recv(self, frame):
         try:
@@ -51,24 +49,25 @@ class ProAudioProcessor(AudioProcessorBase):
             pass
         return frame
 
-# --- 3. サイドバー設定 ---
+# --- 3. サイドバー設定 (名前固定化の修正) ---
+if "fixed_user_name" not in st.session_state:
+    st.session_state.fixed_user_name = "User_" + str(int(time.time()) % 100)
+
 with st.sidebar:
     st.header("👤 ユーザー設定")
-    user_name = st.text_input("表示名", value="User_" + str(int(time.time()) % 100))
+    user_name = st.text_input("表示名", value=st.session_state.fixed_user_name)
+    st.session_state.fixed_user_name = user_name # ユーザーの変更を記憶
+    
     room_id = st.text_input("ルームID", value="101")
     st.divider()
-    st.caption("※同じルームIDの人とだけ会話できます。")
 
 # --- 4. メインコンテンツ ---
 st.title("🎙️ Streamlit Voice Room")
-
-# 現在の場所を分かりやすく表示
 st.markdown(f'<p class="room-label">🏠 Room: {room_id}</p>', unsafe_allow_html=True)
 
 col_left, col_right = st.columns([2, 1])
 
 with col_left:
-    # 部屋ごとに通信を分離するためのキー
     webrtc_ctx = webrtc_streamer(
         key=f"room-{room_id}-chat", 
         mode=WebRtcMode.SENDRECV,
@@ -85,20 +84,17 @@ with col_right:
     st.subheader("ユーザー状態")
     
     if webrtc_ctx.state.playing and webrtc_ctx.audio_processor:
-        # 名前を固定表示（カウントアップしない）
-        st.markdown(f'<span class="user-tag">● {user_name}</span>', unsafe_allow_html=True)
+        # 名前を表示 (st.session_stateから取得するので勝手に増えません)
+        st.markdown(f'<span class="user-tag">● {st.session_state.fixed_user_name}</span>', unsafe_allow_html=True)
         
-        # 音量メーター
         amp = getattr(webrtc_ctx.audio_processor, "amplitude", 0)
         st.progress(min(amp, 100))
         
-        # 通信の安定度をひっそり表示
         count = getattr(webrtc_ctx.audio_processor, "count", 0)
-        st.caption(f"Status: 通信中 (Sync: {count})")
+        st.caption(f"Status: 接続済み (Sync: {count})")
 
         st.divider()
         
-        # 録音機能
         if "is_recording" not in st.session_state:
             st.session_state.is_recording = False
 
@@ -109,7 +105,7 @@ with col_right:
                 st.session_state.is_recording = True
                 st.rerun()
         else:
-            if st.button("⏹️ 録音を停止して保存"):
+            if st.button("⏹️ 停止して保存"):
                 webrtc_ctx.audio_processor.is_recording = False
                 st.session_state.is_recording = False
                 frames = webrtc_ctx.audio_processor.frames
@@ -122,13 +118,12 @@ with col_right:
                         wf.writeframes(b"".join(frames))
                     st.session_state.last_audio = buf.getvalue()
                 st.rerun()
-            st.warning("現在録音中です...")
+            st.warning("録音中...")
     else:
         st.info("Startを押して入室してください")
 
 # --- 6. 録音再生エリア ---
 if "last_audio" in st.session_state and st.session_state.last_audio:
     st.divider()
-    st.subheader("📥 録音済み音声の再生")
     st.audio(st.session_state.last_audio, format="audio/wav")
-    st.download_button("WAVファイルをダウンロード", st.session_state.last_audio, file_name="rec.wav")
+    st.download_button("📥 ダウンロード", st.session_state.last_audio, file_name="record.wav")
