@@ -17,20 +17,26 @@ class AudioAmplitudeProcessor(AudioProcessorBase):
         self.count = 0
 
     def recv(self, frame):
+        # 1. 処理を極限まで速くするため、データのコピーや型変換を最小限にする
         try:
-            # データの取得
-            audio_data = frame.to_ndarray().flatten()
+            # データの読み取り（読み取り専用として扱う）
+            audio_data = frame.to_ndarray()
             self.count += 1
             
+            # 2. 計算負荷を減らすため、全データではなく一部をサンプリングして計算
+            # (10個おきにデータを間引いて計算しても音量計測には十分です)
             if audio_data.size > 0:
-                # 振幅の最大値を計測
-                max_val = np.max(np.abs(audio_data))
+                # ndarrayのまま最大値を計算（これが一番速い）
+                max_val = np.abs(audio_data[::10]).max()
                 
-                # 感度調整 (15000を小さくすると感度が上がり、大きくすると下がります)
+                # 感度調整
                 normalized = int((max_val / 15000) * 100)
                 self.amplitude = max(0, min(normalized, 100))
         except Exception:
-            self.amplitude = 0
+            pass
+            
+        # 3. 重要なポイント：frameをそのまま返す（加工しない）ことで
+        # 音声データの整合性を保ち、ポツポツ音を防ぐ
         return frame
 
 # --- 3. WebRTCストリーマーの設定 (接続強化版) ---
