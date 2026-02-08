@@ -1,7 +1,7 @@
-import streamlit as st
-from streamlit_webrtc import webrtc_streamer, WebRtcMode, AudioProcessorBase
 from streamlit_autorefresh import st_autorefresh
 st_autorefresh(interval=100)
+import streamlit as st
+from streamlit_webrtc import webrtc_streamer, WebRtcMode, AudioProcessorBase
 import numpy as np
 
 # 音声解析クラス
