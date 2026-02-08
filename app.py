@@ -36,7 +36,7 @@ class AudioAmplitudeProcessor(AudioProcessorBase):
 
 # --- 3. WebRTCストリーマーの設定 ---
 webrtc_ctx = webrtc_streamer(
-    key="stable-voice-v5",
+    key="stable-voice-v6", # キーを変えて心機一転
     mode=WebRtcMode.SENDRECV,
     audio_processor_factory=AudioAmplitudeProcessor,
     media_stream_constraints={
@@ -47,12 +47,19 @@ webrtc_ctx = webrtc_streamer(
         },
         "video": False,
     },
+    # ここを強化：複数のSTUNサーバーをリストアップ
     rtc_configuration={
-        "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
+        "iceServers": [
+            {"urls": ["stun:stun.l.google.com:19302"]},
+            {"urls": ["stun:stun1.l.google.com:19302"]},
+            {"urls": ["stun:stun2.l.google.com:19302"]},
+            {"urls": ["stun:stun3.l.google.com:19302"]},
+            {"urls": ["stun:stun4.l.google.com:19302"]},
+        ],
+        "iceTransportPolicy": "all",
     },
     async_processing=True,
 )
-
 # --- 4. メーターと状態の表示 (安全な属性チェック) ---
 st.divider()
 col1, col2 = st.columns(2)
