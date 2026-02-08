@@ -1,32 +1,54 @@
+
 import streamlit as st
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, AudioProcessorBase
 import numpy as np
 
-st.title("Python 複数人ボイスチャット")
+st.title("🎤 音量メーター付きボイスチャット")
 
-# 音声処理のクラス：ここで全員の音を管理する（今回は簡易的な仕組み）
-class MultiUserAudioProcessor(AudioProcessorBase):
+# 音声を解析するクラス
+class AudioAmplitudeProcessor(AudioProcessorBase):
+    def __init__(self):
+        self.amplitude = 0
+
     def recv(self, frame):
-        # 本来はここで他人の音声データを受け取ってミックスしますが、
-        # streamlit-webrtcのデフォルト機能で「サーバー経由の共有」を有効にします。
+        # 音声データを数値配列（numpy）に変換
+        audio_data = frame.to_ndarray()
+        
+        # 音量の計算 (RMS: 二乗平均平方根)
+        if audio_data.size > 0:
+            # 振幅の平均を計算し、扱いやすい数値に変換
+            raw_amplitude = np.sqrt(np.mean(audio_data**2))
+            # 0〜100の範囲にスケーリング（マイク感度に合わせて調整）
+            self.amplitude = min(int(raw_amplitude / 500 * 100), 100)
+        
         return frame
 
-# 部屋の識別（これがあると同じ部屋の人同士で繋がります）
-room_name = st.text_input("ルーム名を入力してください", "default-room")
+# UI部分
+col1, col2 = st.columns([2, 1])
 
-if room_name:
+with col1:
     webrtc_ctx = webrtc_streamer(
-        key=room_name,  # ルーム名ごとにインスタンスを分ける
+        key="volume-check",
         mode=WebRtcMode.SENDRECV,
+        audio_processor_factory=AudioAmplitudeProcessor, # ここで解析クラスを指定
+        media_stream_constraints={"audio": True, "video": False},
         rtc_configuration={
             "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
-        },
-        media_stream_constraints={
-            "audio": True,
-            "video": False,
-        },
-        # 複数人接続を許可するための設定（重要）
-        async_processing=True,
+        }
     )
 
-st.info("別のブラウザタブ、または別のPCから同じルーム名で入ると会話できます。")
+with col2:
+    st.subheader("あなたの声の大きさ")
+    # リアルタイムで音量バーを更新
+    if webrtc_ctx.audio_processor:
+        # プレースホルダーを使ってバーを動かす
+        bar_placeholder = st.empty()
+        # 簡易的なループで値を表示（Streamlitの再描画を利用）
+        amp = webrtc_ctx.audio_processor.amplitude
+        bar_placeholder.progress(amp)
+        if amp > 50:
+            st.write("📢 しゃべっています")
+        elif amp > 5:
+            st.write("💡 音声を検知中")
+    else:
+        st.write("Startを押してください")
