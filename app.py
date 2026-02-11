@@ -25,8 +25,10 @@ st.markdown("""
     .room-label { font-size: 24px; font-weight: bold; color: #1f77b4; }
     
     /* 【重要】自分のプレビュー音声を自分に聞こえないようにする設定 */
-    div[data-testid="stWebRtcStreamer"] video {
-        display: none; /* プレイヤーを隠す */
+    video, audio {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
     }
     </style>
     """, unsafe_allow_html=True)
