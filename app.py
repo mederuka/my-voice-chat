@@ -86,21 +86,26 @@ st.markdown(f'<p class="room-label">Room: {room_id}</p>', unsafe_allow_html=True
 
 left_col, right_col = st.columns([1, 1])
 
+# --- 5. メインエリア (スマホ対応版) ---
 with left_col:
-    # WebRTC設定
     webrtc_ctx = webrtc_streamer(
-        key=f"room-{room_id}-audio-v3", 
+        key=f"room-{room_id}-audio-v4", 
         mode=WebRtcMode.SENDRECV,
         audio_processor_factory=LiteAudioProcessor,
-        # 自分の声を自分に返さないためのパラメータ
         media_stream_constraints={
             "audio": {
                 "echoCancellation": True,
                 "noiseSuppression": True,
+                "autoGainControl": True,
             },
             "video": False,
         },
-        rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
+        # iOS/スマホの接続性を高めるためのICEサーバー設定
+        rtc_configuration={
+            "iceServers": [
+                {"urls": ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]}
+            ]
+        },
         async_processing=True,
     )
 
