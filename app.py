@@ -88,10 +88,16 @@ with left_col:
         mode=WebRtcMode.SENDRECV,
         audio_processor_factory=LiteAudioProcessor,
         media_stream_constraints={
-            "audio": True, # エラー回避のため常にTrue
+            "audio": {
+                "echoCancellation": True,  # エコーキャンセルを有効化
+                "noiseSuppression": True,   # ノイズ抑制
+                "autoGainControl": True,    # 自動ゲイン制御
+            },
             "video": False,
         },
-        rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
+        rtc_configuration={
+            "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
+        },
         async_processing=True,
     )
 
