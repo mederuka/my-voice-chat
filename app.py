@@ -30,6 +30,12 @@ st.markdown("""
         visibility: hidden !important;
         opacity: 0 !important;
     }
+
+    /* ブラウザに対して、この要素の再生音量を強制的にゼロにする指示 */
+    div[data-testid="stWebRtcStreamer"] video {
+        muted: muted !important;
+    }
+
     </style>
     """, unsafe_allow_html=True)
 
