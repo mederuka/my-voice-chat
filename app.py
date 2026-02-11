@@ -7,7 +7,6 @@ import time
 
 # --- 1. ページ構成と自動更新 ---
 st.set_page_config(page_title="Voice Chat Room", layout="wide")
-# 画面の定期更新（ステータス反映のため）
 st_autorefresh(interval=2000, key="vitals")
 
 # CSSデザイン
@@ -24,24 +23,31 @@ st.markdown("""
         margin-bottom: 10px;
     }
     .room-label { font-size: 24px; font-weight: bold; color: #1f77b4; }
-    .mute-warning { color: #ff4b4b; font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. オーディオプロセッサ (音量レベル表示用) ---
+# --- 2. オーディオプロセッサ (消音ロジック内蔵) ---
 class LiteAudioProcessor(AudioProcessorBase):
     def __init__(self):
         self.amplitude = 0
+        self.mute = False  # ミュート状態を保持
 
     def recv(self, frame):
-        raw_data = frame.to_ndarray().astype(np.int16)
+        raw_data = frame.to_ndarray()
         
-        # ステレオならモノラルに変換して音量を計算
-        if raw_data.ndim == 2:
-            raw_data = raw_data.mean(axis=1).astype(np.int16)
+        # ミュート設定がTrueなら、データをすべて0（無音）に上書き
+        if self.mute:
+            raw_data.fill(0)
+            self.amplitude = 0
+            return frame.from_ndarray(raw_data, format=frame.format.name)
 
-        if raw_data.size > 0:
-            max_val = np.abs(raw_data[::50]).max()
+        # 通常の音量計算（表示用）
+        data_int16 = raw_data.astype(np.int16)
+        if data_int16.ndim == 2:
+            data_int16 = data_int16.mean(axis=1).astype(np.int16)
+
+        if data_int16.size > 0:
+            max_val = np.abs(data_int16[::50]).max()
             normalized = int((max_val / 15000) * 100)
             self.amplitude = max(0, min(normalized, 100))
             
@@ -61,11 +67,8 @@ with st.sidebar:
     room_id = st.text_input("Room ID", value="101")
     
     st.divider()
-    # --- 消音（ミュート）スイッチ ---
+    # 消音スイッチ
     is_muted = st.checkbox("Mute Microphone (消音)", value=False)
-    if is_muted:
-        st.warning("マイクはオフになっています")
-    # ----------------------------
     
     st.divider()
     if st.button("Clear Chat"):
@@ -76,46 +79,46 @@ with st.sidebar:
 st.title("Streamlit Voice Room")
 st.markdown(f'<p class="room-label">Room: {room_id}</p>', unsafe_allow_html=True)
 
-# 2カラムレイアウト
 left_col, right_col = st.columns([1, 1])
 
 with left_col:
     # WebRTC設定
     webrtc_ctx = webrtc_streamer(
-        key=f"room-{room_id}-audio-only", 
+        key=f"room-{room_id}-audio-v2", 
         mode=WebRtcMode.SENDRECV,
         audio_processor_factory=LiteAudioProcessor,
         media_stream_constraints={
-            "audio": not is_muted, # ミュート時はaudioをFalseにする
+            "audio": True, # エラー回避のため常にTrue
             "video": False,
         },
         rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
         async_processing=True,
     )
 
+    # プロセッサの状態をUI側のチェックボックスと同期
+    if webrtc_ctx.audio_processor:
+        webrtc_ctx.audio_processor.mute = is_muted
+
     if webrtc_ctx.state.playing:
         status_label = "🔇 Muted" if is_muted else "🎙️ On Air"
         st.markdown(f'<span class="user-tag">{st.session_state.fixed_user_name} ({status_label})</span>', unsafe_allow_html=True)
         
-        if webrtc_ctx.audio_processor and not is_muted:
+        if not is_muted:
             st.write("Voice Level")
-            st.progress(min(webrtc_ctx.audio_processor.amplitude, 100))
-        elif is_muted:
-            st.info("消音中...")
+            st.progress(min(webrtc_ctx.audio_processor.amplitude if webrtc_ctx.audio_processor else 0, 100))
+        else:
+            st.info("Your microphone is muted (Software Mute)")
     else:
         st.info("Press Start to enter the voice room.")
 
 # --- 6. チャットエリア ---
 with right_col:
     st.subheader("Text Chat")
-    
-    # メッセージ表示
     chat_box = st.container(height=400)
     for msg in st.session_state.messages:
         with chat_box.chat_message(msg["role"]):
             st.write(f"**{msg['user']}**: {msg['text']}")
 
-    # 入力フォーム
     if prompt := st.chat_input("Type your message..."):
         st.session_state.messages.append({
             "role": "user", 
