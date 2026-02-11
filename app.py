@@ -9,7 +9,7 @@ import time
 st.set_page_config(page_title="Voice Chat Room", layout="wide")
 st_autorefresh(interval=2000, key="vitals")
 
-# CSS: UIデザインと、ブラウザによる自動再生を視覚的に隠す設定
+# CSS: プレイヤーを完全に隠す
 st.markdown("""
     <style>
     .main { background-color: #f0f2f6; }
@@ -22,12 +22,8 @@ st.markdown("""
         display: inline-block;
         margin-bottom: 10px;
     }
-    .room-label { font-size: 24px; font-weight: bold; color: #1f77b4; }
-    
     /* ページ内のオーディオ・ビデオ要素を強制的に非表示 */
-    video, audio {
-        display: none !important;
-    }
+    video, audio { display: none !important; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -39,8 +35,7 @@ class LiteAudioProcessor(AudioProcessorBase):
 
     def recv(self, frame):
         raw_data = frame.to_ndarray()
-        
-        # 相手に送る声を消音（送信ミュート）
+        # 送信ミュート処理
         if self.mute:
             raw_data.fill(0)
             self.amplitude = 0
@@ -71,11 +66,10 @@ with st.sidebar:
     room_id = st.text_input("Room ID", value="101")
     
     st.divider()
-    # 相手に自分の声を届けないスイッチ
     is_muted = st.checkbox("Mute My Mic (相手への消音)", value=False)
     
-    # 自分のスピーカーから一切の音を出さないスイッチ（これがエコー対策の鍵）
-    force_silent = st.checkbox("Mute My Speakers (自分への消音)", value=True)
+    # モード切り替えを追加
+    listen_mode = st.radio("Listen Mode", ["Silent (エコー防止)", "Hear Others (相手の声を聞く)"])
     
     st.divider()
     if st.button("Clear Chat"):
@@ -84,33 +78,17 @@ with st.sidebar:
 
 # --- 5. メインエリア ---
 st.title("Streamlit Voice Room")
-st.markdown(f'<p class="room-label">Room: {room_id}</p>', unsafe_allow_html=True)
-
-# 自分のスピーカーを殺すためのJavaScriptを注入
-# force_silent が True の間、全メディア要素をミュートし続けます
-st.components.v1.html(
-    f"""
-    <script>
-    const muteFunc = () => {{
-        const media = window.parent.document.querySelectorAll('audio, video');
-        media.forEach(m => {{
-            m.muted = {str(force_silent).lower()};
-            m.volume = 0;
-        }});
-    }};
-    setInterval(muteFunc, 500);
-    </script>
-    """,
-    height=0,
-)
 
 left_col, right_col = st.columns([1, 1])
 
 with left_col:
-    # WebRTC設定
+    # 動作モードの決定
+    # "Silent" なら SENDONLY にすることで、自分への音声ループを物理的に遮断
+    rtc_mode = WebRtcMode.SENDONLY if listen_mode == "Silent (エコー防止)" else WebRtcMode.SENDRECV
+
     webrtc_ctx = webrtc_streamer(
-        key=f"room-{room_id}-final-v7", 
-        mode=WebRtcMode.SENDRECV,
+        key=f"room-{room_id}-v8-{listen_mode}", # モード変更時に再起動させる
+        mode=rtc_mode,
         audio_processor_factory=LiteAudioProcessor,
         media_stream_constraints={
             "audio": {
@@ -128,11 +106,8 @@ with left_col:
         webrtc_ctx.audio_processor.mute = is_muted
 
     if webrtc_ctx.state.playing:
-        status_label = "🔇 Muted" if is_muted else "🎙️ On Air"
-        st.markdown(f'<span class="user-tag">{st.session_state.fixed_user_name} ({status_label})</span>', unsafe_allow_html=True)
-        if force_silent:
-            st.warning("自分のスピーカーはミュートされています")
-        
+        st.success(f"Mode: {rtc_mode.name}")
+        st.markdown(f'<span class="user-tag">{st.session_state.fixed_user_name}</span>', unsafe_allow_html=True)
         if not is_muted:
             st.write("Mic Level")
             st.progress(min(webrtc_ctx.audio_processor.amplitude if webrtc_ctx.audio_processor else 0, 100))
