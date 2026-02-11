@@ -1,131 +1,132 @@
+# -*- coding: utf-8 -*-
 import streamlit as st
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, AudioProcessorBase
 import numpy as np
 from streamlit_autorefresh import st_autorefresh
 import time
-import io
-import wave
 
-# --- 1. ページ構成と自動更新 (1秒間隔) ---
-st.set_page_config(page_title="Voice Room Pro", layout="wide", page_icon="🎙️")
+# --- 1. サーバー内共有メモリ（全ユーザー共通） ---
+@st.cache_resource
+def get_shared_state():
+    # チャット履歴とユーザーの状態を保持
+    return {"messages": [], "active_users": {}}
+
+shared_state = get_shared_state()
+
+# ページ設定
+st.set_page_config(page_title="Voice Chat", layout="wide")
+# 画面を1秒ごとに更新してチャットと同期
 st_autorefresh(interval=1000, key="vitals")
 
-# CSSデザイン
-st.markdown("""
-    <style>
-    .main { background-color: #f0f2f6; }
-    .user-tag {
-        padding: 5px 15px;
-        border-radius: 15px;
-        background-color: #e1e4e8;
-        font-weight: bold;
-        color: #2c3e50;
-        display: inline-block;
-    }
-    .room-label { font-size: 24px; font-weight: bold; color: #1f77b4; }
-    </style>
-    """, unsafe_allow_html=True)
-
-# --- 2. オーディオプロセッサ (ノイズ＆負荷対策済み) ---
+# --- 2. オーディオプロセッサ（音声レベル解析） ---
 class LiteAudioProcessor(AudioProcessorBase):
     def __init__(self):
         self.amplitude = 0
-        self.is_recording = False
-        self.frames = []
+        self.mute = True
 
     def recv(self, frame):
-        raw_data = frame.to_ndarray()
-        
-        if self.is_recording:
-            self.frames.append(raw_data.tobytes())
-
+        raw_data = frame.to_ndarray().astype(np.int16)
         if raw_data.size > 0:
-            # サンプリングで計算負荷を削減
-            max_val = np.abs(raw_data[::50]).max()
-            
-            # 【強化：ノイズゲート】しきい値1000以下の微細な音はカット
-            if max_val < 1000:
-                self.amplitude = 0
+            peak = np.abs(raw_data).max()
+            if peak > 50:
+                # 声の大きさを 0-100 のレベルに変換
+                normalized = np.sqrt(peak / 32767) * 100
+                self.amplitude = int(min(normalized * 1.8, 100))
             else:
-                normalized = int((max_val / 15000) * 100)
-                self.amplitude = max(0, min(normalized, 100))
-            
+                self.amplitude = 0
+        
+        if self.mute:
+            # ミュート時は無音を返す
+            return frame.from_ndarray(np.zeros_like(raw_data), format=frame.format.name)
         return frame
 
-# --- 3. セッション管理 (名前の固定化) ---
-if "fixed_user_name" not in st.session_state:
-    st.session_state.fixed_user_name = "User_" + str(int(time.time()) % 100)
-if "has_announced" not in st.session_state:
-    st.session_state.has_announced = None
+# --- 3. ユーザー設定（セッション） ---
+if "my_name" not in st.session_state:
+    st.session_state.my_name = f"User_{int(time.time()) % 1000}"
+if "self_mute" not in st.session_state:
+    st.session_state.self_mute = True
 
-# --- 4. サイドバー設定 ---
+# --- 4. サイドバー ---
 with st.sidebar:
-    st.header("👤 Settings")
-    u_name = st.text_input("表示名", value=st.session_state.fixed_user_name)
-    st.session_state.fixed_user_name = u_name
+    st.header("設定")
+    new_name = st.text_input("ユーザー名", value=st.session_state.my_name)
+    if new_name != st.session_state.my_name:
+        st.session_state.my_name = new_name
+        
     room_id = st.text_input("ルームID", value="101")
-    st.divider()
-    st.caption("イヤホンの使用を推奨します")
+    st.session_state.self_mute = st.checkbox("自分の声を消音", value=st.session_state.self_mute)
+    
+    if st.button("チャットを全消去"):
+        shared_state["messages"] = []
+        st.rerun()
 
-# --- 5. メインエリア ＆ WebRTC設定 ---
-st.title("🎙️ Streamlit Voice Room")
-st.markdown(f'<p class="room-label">🏠 Room: {room_id}</p>', unsafe_allow_html=True)
+st.title(f"ルーム: {room_id}")
 
-# ブラウザのノイズ除去をフル活用
-webrtc_ctx = webrtc_streamer(
-    key=f"room-{room_id}-v15", 
-    mode=WebRtcMode.SENDRECV,
-    audio_processor_factory=LiteAudioProcessor,
-    media_stream_constraints={
-        "audio": {
-            "echoCancellation": True,
-            "noiseSuppression": True,
-            "autoGainControl": True,
-            "highpassFilter": True,
-            "googNoiseSuppression": True, # Chrome等での独自ノイズ抑制
+# --- 5. メインレイアウト ---
+left_col, right_col = st.columns([1, 1])
+
+with left_col:
+    # WebRTCストリーマー設定
+    webrtc_ctx = webrtc_streamer(
+        key=f"v260-{room_id}", # キーを変えることでキャッシュをクリア
+        mode=WebRtcMode.SENDRECV,
+        audio_processor_factory=LiteAudioProcessor,
+        media_stream_constraints={"audio": True, "video": False},
+        rtc_configuration={
+            "iceServers": [
+                {"urls": ["stun:stun.l.google.com:19302"]},
+                {"urls": ["stun:stun1.l.google.com:19302"]},
+                {"urls": ["stun:stun2.l.google.com:19302"]},
+            ],
+            # ICE候補の収集を強化
+            "iceCandidatePoolSize": 10,
         },
-        "video": False,
-    },
-    rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
-    async_processing=True,
-)
+        async_processing=True,
+        # サブパス運用時は重要
+        sendback_audio=False, 
+    )
 
-# --- 6. 接続後の表示 ---
-if webrtc_ctx.state.playing:
-    if st.session_state.has_announced != room_id:
-        st.toast(f"🎉 {st.session_state.fixed_user_name} さんが入室しました！")
-        st.session_state.has_announced = room_id
+    if webrtc_ctx.audio_processor:
+        webrtc_ctx.audio_processor.mute = st.session_state.self_mute
 
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        st.markdown(f'<span class="user-tag">● {st.session_state.fixed_user_name} (You)</span>', unsafe_allow_html=True)
-        if webrtc_ctx.audio_processor:
-            amp = webrtc_ctx.audio_processor.amplitude
-            st.write("Voice Level")
-            st.progress(min(amp, 100))
-    
-    with col2:
-        is_rec = st.toggle("🔴 録音モード", key="rec_toggle")
-        if webrtc_ctx.audio_processor:
-            webrtc_ctx.audio_processor.is_recording = is_rec
-            
-            if not is_rec and len(webrtc_ctx.audio_processor.frames) > 5:
-                frames = webrtc_ctx.audio_processor.frames
-                buf = io.BytesIO()
-                with wave.open(buf, "wb") as wf:
-                    wf.setnchannels(1); wf.setsampwidth(2); wf.setframerate(48000)
-                    wf.writeframes(b"".join(frames))
-                st.session_state.last_audio = buf.getvalue()
-                webrtc_ctx.audio_processor.frames = []
-                st.rerun()
-else:
-    st.session_state.has_announced = None
-    st.info("Startボタンを押して入室してください")
+    # 入退室の通知
+    is_playing = webrtc_ctx.state.playing
+    if is_playing and st.session_state.get("_prev_playing") != True:
+        shared_state["messages"].append({"role": "system", "text": f"通知: {st.session_state.my_name} が入室しました"})
+        st.session_state._prev_playing = True
+    elif not is_playing and st.session_state.get("_prev_playing") == True:
+        shared_state["messages"].append({"role": "system", "text": f"通知: {st.session_state.my_name} が退室しました"})
+        st.session_state._prev_playing = False
 
-# --- 7. 録音再生エリア ---
-if "last_audio" in st.session_state:
-    st.divider()
-    st.subheader("📥 Latest Recording")
-    st.audio(st.session_state.last_audio)
-    st.download_button("Download WAV", st.session_state.last_audio, file_name="voice_rec.wav")
+    st.subheader("参加メンバー")
+    if is_playing:
+        level = webrtc_ctx.audio_processor.amplitude if webrtc_ctx.audio_processor else 0
+        status_label = "消音中" if st.session_state.self_mute else ("発言中" if level > 30 else "オンライン")
+        
+        st.write(f"名前: {st.session_state.my_name} [ {status_label} ]")
+        st.markdown(f"""
+            <div style="width:100%; background:#eee; height:10px; border-radius:5px;">
+                <div style="width:{level}%; background:#4CAF50; height:100%; border-radius:5px; transition: width 0.1s;"></div>
+            </div>
+            """, unsafe_allow_html=True)
+    else:
+        st.info("STARTボタンを押してボイスチャットを開始してください")
+
+# --- 6. チャットエリア ---
+with right_col:
+    st.subheader("テキストチャット")
+    chat_box = st.container(height=450)
+    with chat_box:
+        for m in shared_state["messages"]:
+            if m["role"] == "system":
+                st.caption(m["text"])
+            else:
+                st.chat_message(m["role"]).write(f"{m['user']}: {m['text']}")
+
+    if prompt := st.chat_input("メッセージを入力..."):
+        shared_state["messages"].append({
+            "role": "user", 
+            "user": st.session_state.my_name, 
+            "text": prompt
+        })
+        st.rerun()
