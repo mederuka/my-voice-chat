@@ -23,25 +23,29 @@ st.markdown("""
         margin-bottom: 10px;
     }
     .room-label { font-size: 24px; font-weight: bold; color: #1f77b4; }
+    
+    /* 【重要】自分のプレビュー音声を自分に聞こえないようにする設定 */
+    div[data-testid="stWebRtcStreamer"] video {
+        display: none; /* プレイヤーを隠す */
+    }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. オーディオプロセッサ (消音ロジック内蔵) ---
+# --- 2. オーディオプロセッサ ---
 class LiteAudioProcessor(AudioProcessorBase):
     def __init__(self):
         self.amplitude = 0
-        self.mute = False  # ミュート状態を保持
+        self.mute = False 
 
     def recv(self, frame):
         raw_data = frame.to_ndarray()
         
-        # ミュート設定がTrueなら、データをすべて0（無音）に上書き
+        # 相手に送る声を消音（ミュートボタン用）
         if self.mute:
             raw_data.fill(0)
             self.amplitude = 0
             return frame.from_ndarray(raw_data, format=frame.format.name)
 
-        # 通常の音量計算（表示用）
         data_int16 = raw_data.astype(np.int16)
         if data_int16.ndim == 2:
             data_int16 = data_int16.mean(axis=1).astype(np.int16)
@@ -67,8 +71,7 @@ with st.sidebar:
     room_id = st.text_input("Room ID", value="101")
     
     st.divider()
-    # 消音スイッチ
-    is_muted = st.checkbox("Mute Microphone (消音)", value=False)
+    is_muted = st.checkbox("Mute for Others (相手への消音)", value=False)
     
     st.divider()
     if st.button("Clear Chat"):
@@ -84,24 +87,22 @@ left_col, right_col = st.columns([1, 1])
 with left_col:
     # WebRTC設定
     webrtc_ctx = webrtc_streamer(
-        key=f"room-{room_id}-audio-v2", 
+        key=f"room-{room_id}-audio-v3", 
         mode=WebRtcMode.SENDRECV,
         audio_processor_factory=LiteAudioProcessor,
+        # 自分の声を自分に返さないためのパラメータ
         media_stream_constraints={
             "audio": {
-                "echoCancellation": True,  # エコーキャンセルを有効化
-                "noiseSuppression": True,   # ノイズ抑制
-                "autoGainControl": True,    # 自動ゲイン制御
+                "echoCancellation": True,
+                "noiseSuppression": True,
             },
             "video": False,
         },
-        rtc_configuration={
-            "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
-        },
+        rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
         async_processing=True,
     )
 
-    # プロセッサの状態をUI側のチェックボックスと同期
+    # プロセッサの状態同期
     if webrtc_ctx.audio_processor:
         webrtc_ctx.audio_processor.mute = is_muted
 
@@ -109,13 +110,12 @@ with left_col:
         status_label = "🔇 Muted" if is_muted else "🎙️ On Air"
         st.markdown(f'<span class="user-tag">{st.session_state.fixed_user_name} ({status_label})</span>', unsafe_allow_html=True)
         
+        # 自分のレベルメーター（相手に届いている音量）
         if not is_muted:
             st.write("Voice Level")
             st.progress(min(webrtc_ctx.audio_processor.amplitude if webrtc_ctx.audio_processor else 0, 100))
-        else:
-            st.info("Your microphone is muted (Software Mute)")
     else:
-        st.info("Press Start to enter the voice room.")
+        st.info("Press Start to enter.")
 
 # --- 6. チャットエリア ---
 with right_col:
