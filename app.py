@@ -9,7 +9,7 @@ import time
 st.set_page_config(page_title="Voice Chat Room", layout="wide")
 st_autorefresh(interval=2000, key="vitals")
 
-# CSSデザイン
+# CSS: 自分のプレビュー音声を徹底的に消音・非表示
 st.markdown("""
     <style>
     .main { background-color: #f0f2f6; }
@@ -24,22 +24,14 @@ st.markdown("""
     }
     .room-label { font-size: 24px; font-weight: bold; color: #1f77b4; }
     
-    /* 【重要】自分のプレビュー音声を自分に聞こえないようにする設定 */
+    /* 全てのWebRTCオーディオ・ビデオ要素を画面から隠し、かつ消音 */
     video, audio {
         display: none !important;
-        visibility: hidden !important;
-        opacity: 0 !important;
     }
-
-    /* ブラウザに対して、この要素の再生音量を強制的にゼロにする指示 */
-    div[data-testid="stWebRtcStreamer"] video {
-        muted: muted !important;
-    }
-
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. オーディオプロセッサ ---
+# --- 2. オーディオプロセッサ (消音ロジック内蔵) ---
 class LiteAudioProcessor(AudioProcessorBase):
     def __init__(self):
         self.amplitude = 0
@@ -79,6 +71,7 @@ with st.sidebar:
     room_id = st.text_input("Room ID", value="101")
     
     st.divider()
+    # 相手に対するミュート
     is_muted = st.checkbox("Mute for Others (相手への消音)", value=False)
     
     st.divider()
@@ -92,10 +85,10 @@ st.markdown(f'<p class="room-label">Room: {room_id}</p>', unsafe_allow_html=True
 
 left_col, right_col = st.columns([1, 1])
 
-# --- 5. メインエリア (スマホ対応版) ---
 with left_col:
+    # WebRTC設定
     webrtc_ctx = webrtc_streamer(
-        key=f"room-{room_id}-audio-v4", 
+        key=f"room-{room_id}-v5", # キーを更新して設定を反映
         mode=WebRtcMode.SENDRECV,
         audio_processor_factory=LiteAudioProcessor,
         media_stream_constraints={
@@ -106,16 +99,29 @@ with left_col:
             },
             "video": False,
         },
-        # iOS/スマホの接続性を高めるためのICEサーバー設定
-        rtc_configuration={
-            "iceServers": [
-                {"urls": ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]}
-            ]
-        },
+        # 自分の声をスピーカーから出さないようにする設定
+        desired_playing_state=True,
+        rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
         async_processing=True,
     )
 
-    # プロセッサの状態同期
+    # 自分の声を自分だけに聞こえないようにするJavaScriptの注入
+    # WebRTCコンポーネントが生成する音声出力を強制的にミュートします
+    st.components.v1.html(
+        """
+        <script>
+        const muteInterval = setInterval(() => {
+            const audios = window.parent.document.querySelectorAll('audio, video');
+            audios.forEach(a => {
+                a.muted = true;  // 自分のスピーカー出力をミュート
+                a.volume = 0;
+            });
+        }, 1000);
+        </script>
+        """,
+        height=0,
+    )
+
     if webrtc_ctx.audio_processor:
         webrtc_ctx.audio_processor.mute = is_muted
 
@@ -123,7 +129,6 @@ with left_col:
         status_label = "🔇 Muted" if is_muted else "🎙️ On Air"
         st.markdown(f'<span class="user-tag">{st.session_state.fixed_user_name} ({status_label})</span>', unsafe_allow_html=True)
         
-        # 自分のレベルメーター（相手に届いている音量）
         if not is_muted:
             st.write("Voice Level")
             st.progress(min(webrtc_ctx.audio_processor.amplitude if webrtc_ctx.audio_processor else 0, 100))
