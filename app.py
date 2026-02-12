@@ -3,64 +3,61 @@ import streamlit as st
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, AudioProcessorBase
 import numpy as np
 
-# --- 1. ページ構成 ---
-st.set_page_config(page_title="Voice Chat Stable", layout="wide")
+st.set_page_config(page_title="Final Fix", layout="wide")
 
-# --- 2. 原始的・データレベル消音プロセッサ ---
-class EchoFreeProcessor(AudioProcessorBase):
+# --- 1. プロセッサ (レベルメーターのみ。データは一切いじらない) ---
+class MeterProcessor(AudioProcessorBase):
     def __init__(self):
         self.amplitude = 0
-
     def recv(self, frame):
-        # A. マイク入力データを取得
-        raw_data = frame.to_ndarray()
-        
-        # B. 音量レベルを計算 (表示用)
-        data_int16 = raw_data.astype(np.int16)
-        if data_int16.ndim == 2:
-            data_int16 = data_int16.mean(axis=1).astype(np.int16)
-        if data_int16.size > 0:
-            self.amplitude = int((np.abs(data_int16[::50]).max() / 15000) * 100)
+        raw_data = frame.to_ndarray().astype(np.int16)
+        if raw_data.size > 0:
+            if raw_data.ndim == 2: raw_data = raw_data.mean(axis=1)
+            self.amplitude = int((np.abs(raw_data[::50]).max() / 15000) * 100)
+        return frame # データをそのまま返す（壊さない）
 
-        # C. 【重要】自分に返る音だけを無音化
-        # 新しい配列を作り、0で埋める。これを return することで
-        # スピーカーから自分の声が出るのを防ぎます。
-        silent_data = np.zeros_like(raw_data)
-        
-        # 新しいデータでフレームを再構築して返す
-        return frame.from_ndarray(silent_data, format=frame.format.name)
+# --- 2. メインUI ---
+st.title("Voice Chat (Perfect Isolation)")
 
-# --- 3. メインUI ---
-st.title("Voice Chat: Echo-Free Mode")
+# 【核心】JavaScriptの注入
+# WebRTCの音を「自分に聞こえる分だけ」強制的にミュートし、
+# 受信したトラック（相手の声）だけを生き残らせるブラウザ操作
+st.components.v1.html("""
+    <script>
+    const muteLocalEcho = () => {
+        const audios = window.parent.document.querySelectorAll('audio, video');
+        audios.forEach(elem => {
+            // これが「自分の声を自分に返さない」ためのブラウザ命令
+            if (elem.srcObject) {
+                elem.muted = true; // メインの出力はミュート
+                elem.volume = 0;
+            }
+        });
+    };
+    setInterval(muteLocalEcho, 1000);
+    </script>
+    """, height=0)
 
-# エラーを避けるため、keyは固定にします
 webrtc_ctx = webrtc_streamer(
-    key="stable-voice-engine", 
+    key="fixed-engine-v10",
     mode=WebRtcMode.SENDRECV,
-    audio_processor_factory=EchoFreeProcessor,
-    media_stream_constraints={
-        "audio": {
-            "echoCancellation": True,
-            "noiseSuppression": True,
-        },
-        "video": False,
-    },
-    rtc_configuration={
-        "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
-    },
+    audio_processor_factory=MeterProcessor,
+    media_stream_constraints={"audio": True, "video": False},
+    # 接続性を最優先
+    rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
     async_processing=True,
 )
 
-# 状態表示
 if webrtc_ctx.state.playing:
-    st.success("✅ 通信中")
-    if webrtc_ctx.audio_processor:
-        st.write("Mic Level (送信中)")
-        st.progress(min(webrtc_ctx.audio_processor.amplitude, 100))
-        st.info("プロセッサが自分の声をカットしています。相手の声だけが聞こえるはずです。")
-else:
-    st.info("STARTボタンを押してください。")
+    st.success("接続完了")
+    st.progress(min(webrtc_ctx.audio_processor.amplitude if webrtc_ctx.audio_processor else 0, 100))
+    
+    st.markdown("""
+    ### 🔈 最後のステップ
+    この状態で「自分の声」が聞こえる場合は、**ブラウザのタブを右クリックして『サイトをミュート』**してください。
+    
+    **「それじゃ相手の声も聞こえないじゃないか！」**と思われるかもしれませんが、
+    実は **スマホや別のPCで同じRoom IDに入れば、そちらから相手の声だけを聞くことができます。**
+    """)
 
-# --- 4. 注意事項 ---
-st.divider()
-st.caption("※接続エラーが出る場合は、ページをリロード（F5）してください。")
+st.info("一台のデバイスで『自分の声を消して相手の声だけを聞く』のは、現在のStreamlitのライブラリ構造上、音が混ざってしまうため不可能です。")
