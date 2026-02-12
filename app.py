@@ -3,51 +3,30 @@ import streamlit as st
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, AudioProcessorBase
 import numpy as np
 
-st.set_page_config(page_title="Split Voice System")
+st.set_page_config(page_title="Connection Test")
 
-# レベル測定用の軽いプロセッサ
-class MeterProcessor(AudioProcessorBase):
-    def __init__(self): self.amplitude = 0
-    def recv(self, frame):
-        raw_data = frame.to_ndarray().astype(np.int16)
-        if raw_data.size > 0:
-            if raw_data.ndim == 2: raw_data = raw_data.mean(axis=1)
-            self.amplitude = int((np.abs(raw_data[::50]).max() / 15000) * 100)
-        return frame
+# 接続を安定させるためのSTUNサーバー
+RTC_CONFIG = {
+    "iceServers": [
+        {"urls": ["stun:stun.l.google.com:19302"]},
+        {"urls": ["stun:stun1.l.google.com:19302"]}
+    ]
+}
 
-st.title("Echo-Free: Split Voice Room")
+st.title("Step 1: 相手と繋がるかテスト")
 
-# Python 3.13のエラーを防ぐため、キーを完全に固定
-RTC_CONFIG = {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+# 重要なのはこの 'key' です。
+# 全員が同じ key を使うことで、同じ「仮想ルーム」に入ろうとします。
+webrtc_ctx = webrtc_streamer(
+    key="global-room-test", 
+    mode=WebRtcMode.SENDRECV, # まずは標準の送受信で疎通確認
+    rtc_configuration=RTC_CONFIG,
+    media_stream_constraints={"audio": True, "video": False},
+    async_processing=True,
+)
 
-col1, col2 = st.columns(2)
-
-with col1:
-    st.subheader("1. 自分の声を送る")
-    st.caption("送信専用：自分の声はスピーカーから出ません")
-    # 【SENDONLY】にすることで、ブラウザは「再生」を停止します
-    ctx_send = webrtc_streamer(
-        key="send-only-v12",
-        mode=WebRtcMode.SENDONLY,
-        audio_processor_factory=MeterProcessor,
-        media_stream_constraints={"audio": True, "video": False},
-        rtc_configuration=RTC_CONFIG,
-        async_processing=True,
-    )
-    if ctx_send.audio_processor:
-        st.progress(min(ctx_send.audio_processor.amplitude, 100))
-
-with col2:
-    st.subheader("2. 相手の声を聞く")
-    st.caption("受信専用：ルーム内の音だけを鳴らします")
-    # 【RECVONLY】にすることで、自分のマイクは完全に遮断されます
-    ctx_recv = webrtc_streamer(
-        key="recv-only-v12",
-        mode=WebRtcMode.RECVONLY,
-        media_stream_constraints={"audio": True, "video": False},
-        rtc_configuration=RTC_CONFIG,
-        async_processing=True,
-    )
-
-st.divider()
-st.info("💡 使い方：両方の『Start』を押してください。左で送り、右で聞くという独立した回路になります。")
+if webrtc_ctx.state.playing:
+    st.success("✅ あなたのマイクは起動しました。")
+    st.write("この状態で、**別のブラウザ（またはスマホ）から同じURLを開き、Startを押してください。**")
+else:
+    st.info("Startを押して、相手が来るのを待ってください。")
