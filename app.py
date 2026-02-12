@@ -2,51 +2,46 @@
 import streamlit as st
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, AudioProcessorBase
 import numpy as np
-import av  # フレーム操作に必須
 
 # --- 1. ページ構成 ---
-st.set_page_config(page_title="Final Echo-Free Room", layout="wide")
+st.set_page_config(page_title="Voice Chat Stable", layout="wide")
 
 # --- 2. 原始的・データレベル消音プロセッサ ---
-class AbsoluteEchoCanceller(AudioProcessorBase):
+class EchoFreeProcessor(AudioProcessorBase):
     def __init__(self):
         self.amplitude = 0
 
-    def recv(self, frame: av.AudioFrame) -> av.AudioFrame:
-        # A. 自分のマイクから入力されたデータを取得
+    def recv(self, frame):
+        # A. マイク入力データを取得
         raw_data = frame.to_ndarray()
         
-        # B. 【レベル計算】（消音する前に実行）
+        # B. 音量レベルを計算 (表示用)
         data_int16 = raw_data.astype(np.int16)
         if data_int16.ndim == 2:
             data_int16 = data_int16.mean(axis=1).astype(np.int16)
         if data_int16.size > 0:
-            max_val = np.abs(data_int16[::50]).max()
-            self.amplitude = int((max_val / 15000) * 100)
+            self.amplitude = int((np.abs(data_int16[::50]).max() / 15000) * 100)
 
-        # C. 【核心：データの無音化】
-        # raw_dataを0にするのではなく、送信は生かしつつ、
-        # スピーカー（自分）に返すデータだけを無音の別配列に差し替えます
+        # C. 【重要】自分に返る音だけを無音化
+        # 新しい配列を作り、0で埋める。これを return することで
+        # スピーカーから自分の声が出るのを防ぎます。
         silent_data = np.zeros_like(raw_data)
         
-        # D. 無音にしたフレームを自分（スピーカー）に返す
-        return av.AudioFrame.from_ndarray(silent_data, format=frame.format.name, layout=frame.layout.name)
+        # 新しいデータでフレームを再構築して返す
+        return frame.from_ndarray(silent_data, format=frame.format.name)
 
 # --- 3. メインUI ---
-st.title("Streamlit Voice Room (Final Code)")
+st.title("Voice Chat: Echo-Free Mode")
 
-room_id = st.sidebar.text_input("Room ID", "101")
-
-# WebRTC設定 (標準的なSENDRECVで接続性を確保)
+# エラーを避けるため、keyは固定にします
 webrtc_ctx = webrtc_streamer(
-    key=f"final-stable-{room_id}",
+    key="stable-voice-engine", 
     mode=WebRtcMode.SENDRECV,
-    audio_processor_factory=AbsoluteEchoCanceller,
+    audio_processor_factory=EchoFreeProcessor,
     media_stream_constraints={
         "audio": {
             "echoCancellation": True,
             "noiseSuppression": True,
-            "autoGainControl": True,
         },
         "video": False,
     },
@@ -58,16 +53,14 @@ webrtc_ctx = webrtc_streamer(
 
 # 状態表示
 if webrtc_ctx.state.playing:
-    st.success("✅ 通信中: プロセッサが自分の声を物理的にカットしています")
+    st.success("✅ 通信中")
     if webrtc_ctx.audio_processor:
-        st.write("マイク入力（相手には届いています）")
+        st.write("Mic Level (送信中)")
         st.progress(min(webrtc_ctx.audio_processor.amplitude, 100))
+        st.info("プロセッサが自分の声をカットしています。相手の声だけが聞こえるはずです。")
 else:
-    st.info("Startボタンを押してください。")
+    st.info("STARTボタンを押してください。")
 
 # --- 4. 注意事項 ---
 st.divider()
-st.write("### 動作の仕組み")
-st.write("このコードは、マイクが拾った音を**サーバーへ送る処理**と、**自分のスピーカーへ返す処理**をデータレベルで分離しています。")
-st.write("1. **送信**: マイクの音は生きたままサーバーへ送られます。")
-st.write("2. **自分への再生**: プロセッサがデータを 0 (無音) に書き換えてからスピーカーへ渡すため、自分の声は聞こえません。")
+st.caption("※接続エラーが出る場合は、ページをリロード（F5）してください。")
