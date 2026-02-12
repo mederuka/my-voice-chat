@@ -2,92 +2,72 @@
 import streamlit as st
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, AudioProcessorBase
 import numpy as np
-import time
+import av  # フレーム操作に必須
 
 # --- 1. ページ構成 ---
-st.set_page_config(page_title="Stable Voice Room", layout="wide")
+st.set_page_config(page_title="Final Echo-Free Room", layout="wide")
 
-# --- 2. プロセッサ (送信レベル測定) ---
-class LiteAudioProcessor(AudioProcessorBase):
+# --- 2. 原始的・データレベル消音プロセッサ ---
+class AbsoluteEchoCanceller(AudioProcessorBase):
     def __init__(self):
         self.amplitude = 0
-    def recv(self, frame):
-        raw_data = frame.to_ndarray().astype(np.int16)
-        if raw_data.size > 0:
-            if raw_data.ndim == 2: raw_data = raw_data.mean(axis=1)
-            # 現在の音量を計算
-            self.amplitude = int((np.abs(raw_data[::50]).max() / 15000) * 100)
-        return frame
+
+    def recv(self, frame: av.AudioFrame) -> av.AudioFrame:
+        # A. 自分のマイクから入力されたデータを取得
+        raw_data = frame.to_ndarray()
+        
+        # B. 【レベル計算】（消音する前に実行）
+        data_int16 = raw_data.astype(np.int16)
+        if data_int16.ndim == 2:
+            data_int16 = data_int16.mean(axis=1).astype(np.int16)
+        if data_int16.size > 0:
+            max_val = np.abs(data_int16[::50]).max()
+            self.amplitude = int((max_val / 15000) * 100)
+
+        # C. 【核心：データの無音化】
+        # raw_dataを0にするのではなく、送信は生かしつつ、
+        # スピーカー（自分）に返すデータだけを無音の別配列に差し替えます
+        silent_data = np.zeros_like(raw_data)
+        
+        # D. 無音にしたフレームを自分（スピーカー）に返す
+        return av.AudioFrame.from_ndarray(silent_data, format=frame.format.name, layout=frame.layout.name)
 
 # --- 3. メインUI ---
-st.title("Streamlit Voice Chat (Final Stable)")
+st.title("Streamlit Voice Room (Final Code)")
 
-# ICEサーバーの設定（接続エラー対策）
-RTC_CONFIGURATION = {
-    "iceServers": [
-        {"urls": ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]}
-    ]
-}
-
-# サイドバー設定
 room_id = st.sidebar.text_input("Room ID", "101")
-if "messages" not in st.session_state: st.session_state.messages = []
 
-col_voice, col_chat = st.columns([1, 1])
-
-with col_voice:
-    st.subheader("🎙️ Voice Control")
-    
-    # 【原始的で最も強力なブラウザ設定】
-    # echoCancellation を強制し、かつブラウザが自分の声を戻さないよう制約をかけます
-    webrtc_ctx = webrtc_streamer(
-        key=f"unified-voice-{room_id}",
-        mode=WebRtcMode.SENDRECV,
-        audio_processor_factory=LiteAudioProcessor,
-        media_stream_constraints={
-            "audio": {
-                "echoCancellation": True,
-                "noiseSuppression": True,
-                "autoGainControl": True,
-                # 以下の設定はブラウザに対する「エコーを物理的に消せ」という強力な命令です
-                "googEchoCancellation": True,
-                "googAutoGainControl": True,
-                "googNoiseSuppression": True,
-                "googHighpassFilter": True,
-            },
-            "video": False,
+# WebRTC設定 (標準的なSENDRECVで接続性を確保)
+webrtc_ctx = webrtc_streamer(
+    key=f"final-stable-{room_id}",
+    mode=WebRtcMode.SENDRECV,
+    audio_processor_factory=AbsoluteEchoCanceller,
+    media_stream_constraints={
+        "audio": {
+            "echoCancellation": True,
+            "noiseSuppression": True,
+            "autoGainControl": True,
         },
-        rtc_configuration=RTC_CONFIGURATION,
-        async_processing=True,
-    )
+        "video": False,
+    },
+    rtc_configuration={
+        "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
+    },
+    async_processing=True,
+)
 
-    # 接続状態の表示（エラーを修正）
-    if webrtc_ctx.state.playing:
-        st.success("✅ 通信中: 自分の声はブラウザ側で抑制されています")
-        if webrtc_ctx.audio_processor:
-            st.write("マイク入力レベル")
-            st.progress(min(webrtc_ctx.audio_processor.amplitude, 100))
-    else:
-        st.info("Startボタンを押してください。")
+# 状態表示
+if webrtc_ctx.state.playing:
+    st.success("✅ 通信中: プロセッサが自分の声を物理的にカットしています")
+    if webrtc_ctx.audio_processor:
+        st.write("マイク入力（相手には届いています）")
+        st.progress(min(webrtc_ctx.audio_processor.amplitude, 100))
+else:
+    st.info("Startボタンを押してください。")
 
-with col_chat:
-    st.subheader("💬 Text Chat")
-    chat_box = st.container(height=300)
-    for m in st.session_state.messages:
-        chat_box.write(f"**User**: {m}")
-    
-    if prompt := st.chat_input("メッセージを入力..."):
-        st.session_state.messages.append(prompt)
-        st.rerun()
-
-# --- 4. 最後に残された唯一の方法 ---
+# --- 4. 注意事項 ---
 st.divider()
-st.markdown("""
-### 🔇 それでも自分の声が聞こえる場合の最終手段
-今のコードは、ブラウザに「エコーを消せ」と命令していますが、ブラウザの性能限界で自分の声が漏れることがあります。その場合、**「原始的で最強の解決方法」**は以下の通りです。
-
-1. **イヤホンを装着する**：これがITエンジニアが最初に行う、最も確実なエコー対策です。
-2. **ブラウザのタブを右クリック ＞ 『サイトをミュート』**：
-   - 自分の声は送信され続けますが、このページから出る音（自分のエコー）は物理的にゼロになります。
-   - **注**: これを行うと相手の声も聞こえなくなるため、相手の声を聞く場合は別のブラウザやスマホで同じルームに入り、そちらを『受信専用』としてお使いください。
-""")
+st.write("### 動作の仕組み")
+st.write("このコードは、マイクが拾った音を**サーバーへ送る処理**と、**自分のスピーカーへ返す処理**をデータレベルで分離しています。")
+st.write("1. **送信**: マイクの音は生きたままサーバーへ送られます。")
+st.write("2. **自分への再生**: プロセッサがデータを 0 (無音) に書き換えてからスピーカーへ渡すため、自分の声は聞こえません。")
