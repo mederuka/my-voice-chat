@@ -1,72 +1,60 @@
 # -*- coding: utf-8 -*-
 import streamlit as st
-import os
-import glob
 import uuid
+import time
 
-st.set_page_config(page_title="Final Transceiver", layout="centered")
+# --- 全ユーザーで共有するための特殊なメモリ空間 ---
+# これにより、ファイル保存なしで相手にデータを渡せます
+if "shared_mailbox" not in st.session_state.__class__._shared_state:
+    st.session_state.__class__._shared_state["shared_mailbox"] = {}
 
-# 保存ディレクトリ
-SAVE_DIR = "shared_voices"
-if not os.path.exists(SAVE_DIR):
-    os.makedirs(SAVE_DIR)
+shared_data = st.session_state.__class__._shared_state["shared_mailbox"]
 
-# --- ユーザー識別 (自分を特定するためのID) ---
+st.set_page_config(page_title="Cloud Transceiver")
+
+# ユーザーIDの生成
 if "my_id" not in st.session_state:
     st.session_state["my_id"] = str(uuid.uuid4())[:4]
 
-st.title(f"📟 トランシーバー (ID: {st.session_state['my_id']})")
-st.caption("自分の声は自分には聞こえず、相手にだけ届きます。")
+st.title(f"📟 クラウド・トランシーバー (ID: {st.session_state['my_id']})")
 
 # --- 1. 送信セクション ---
-audio_data = st.audio_input("マイクを押して話し、チェックで送信")
+audio_data = st.audio_input("マイクで話し、送信ボタン（チェック）を押す")
 
 if audio_data:
-    # ファイル名に「送り主ID」と「ユニークID」を入れる
-    # 形式: senderID_uniqueID.wav
-    unique_id = str(uuid.uuid4())[:8]
-    file_name = f"{st.session_state['my_id']}_{unique_id}.wav"
-    file_path = os.path.join(SAVE_DIR, file_name)
+    # 共有メモリに「送り主ID」と「音声データ」をセット
+    # 既存のデータを上書きして、最新の1つだけを保持します
+    shared_data["sender"] = st.session_state["my_id"]
+    shared_data["audio"] = audio_data.read()
+    shared_data["timestamp"] = time.time()
     
-    with open(file_path, "wb") as f:
-        f.write(audio_data.getbuffer())
-    
-    st.success("相手に送信しました！")
-    # 送信直後は再生させないよう少し待つか、すぐリセット
-    st.toast("Sent!")
+    st.success("クラウドへ送信しました！相手の画面で自動再生されます。")
 
 st.divider()
 
-# --- 2. 受信 & フィルタリングセクション ---
-voice_files = glob.glob(os.path.join(SAVE_DIR, "*.wav"))
+# --- 2. 受信セクション ---
+# 最後に再生したメッセージのタイムスタンプを記録
+if "last_heard" not in st.session_state:
+    st.session_state["last_heard"] = 0
 
-if voice_files:
-    for latest_file in voice_files:
-        fname = os.path.basename(latest_file)
-        
-        # 【重要】ファイル名の先頭が「自分のID」でなければ再生する
-        if not fname.startswith(st.session_state["my_id"]):
-            st.warning("🆕 相手からの新着メッセージ")
+# 共有メモリにデータがあり、かつ「送り主が自分ではない」場合
+if "audio" in shared_data:
+    if shared_data["sender"] != st.session_state["my_id"]:
+        if shared_data["timestamp"] > st.session_state["last_heard"]:
             
-            with open(latest_file, "rb") as f:
-                audio_bytes = f.read()
+            st.warning("🆕 相手からの新着メッセージを受信！")
+            st.audio(shared_data["audio"], format="audio/wav", autoplay=True)
             
-            # 読み込んだら即座に物理削除（相手に届いた証拠）
-            try:
-                os.remove(latest_file)
-            except:
-                pass
-            
-            # 再生（相手の声だけが鳴る）
-            st.audio(audio_bytes, format="audio/wav", autoplay=True)
+            # 既読にする
+            st.session_state["last_heard"] = shared_data["timestamp"]
         else:
-            # 自分のファイルがまだ残っている場合は、何もしない（あるいは古いので消す）
-            # ※相手がまだ受け取っていない状態
-            st.info("相手が受信するのを待っています...")
+            st.write("💤 待機中（新着なし）")
+    else:
+        st.write("📤 あなたの送信した声がクラウドにあります（相手の受信待ち）")
 else:
-    st.write("💤 新着なし")
+    st.write("💤 メッセージを待っています...")
 
-# --- 3. 無点滅・自動更新JavaScript ---
+# --- 3. 点滅を抑えた自動更新 ---
 st.components.v1.html(
     """
     <script>
