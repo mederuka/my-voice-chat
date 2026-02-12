@@ -1,59 +1,63 @@
 # -*- coding: utf-8 -*-
 import streamlit as st
 import uuid
+import os
 import time
+import base64
 
-# --- 全ユーザー共通の「声の置き場」を作成 ---
-@st.cache_resource
-def get_global_mailbox():
-    # サーバーが起動している間、全員で共有される辞書
-    return {}
+st.set_page_config(page_title="Final Survival Transceiver")
 
-mailbox = get_global_mailbox()
+# 保存先（Streamlitが実行されているディレクトリ）
+SAVE_FILE = "global_shared_voice.wav"
 
-st.set_page_config(page_title="Cloud Transceiver")
-
-# 自分のIDを固定
 if "my_id" not in st.session_state:
     st.session_state["my_id"] = str(uuid.uuid4())[:4]
 
-st.title(f"📟 クラウド・トランシーバー (ID: {st.session_state['my_id']})")
+st.title(f"📟 最終通信 (ID: {st.session_state['my_id']})")
 
-# --- 1. 送信：掲示板に声を置く ---
-audio_data = st.audio_input("マイクで話し、チェックで送信")
+# --- 1. 送信：物理ファイルを上書き保存 ---
+audio_data = st.audio_input("マイクで話し、送信（チェック）")
 
 if audio_data:
-    # 掲示板の内容を書き換える
-    mailbox["sender"] = st.session_state["my_id"]
-    mailbox["audio_bytes"] = audio_data.read()
-    mailbox["timestamp"] = time.time()
+    # 誰が送ったかの情報をファイル名の代わりに「中身」で判定するのは難しいため
+    # 送信時に「送信者ID」を別の小さなファイルに書き出します
+    with open(SAVE_FILE, "wb") as f:
+        f.write(audio_data.read())
     
-    st.success("クラウドに声を置きました。相手に届きます。")
+    with open("sender_id.txt", "w") as f:
+        f.write(st.session_state["my_id"])
+        
+    st.success("サーバーへ物理的に書き込みました。")
+    st.rerun()
 
 st.divider()
 
-# --- 2. 受信：掲示板を見に行く ---
-if "last_heard_ts" not in st.session_state:
-    st.session_state["last_heard_ts"] = 0
+# --- 2. 受信：物理ファイルを監視 ---
+if "last_check" not in st.session_state:
+    st.session_state["last_check"] = 0
 
-if "audio_bytes" in mailbox:
-    # 「送り主が自分ではない」かつ「まだ聞いていない新しい声」なら再生
-    if mailbox["sender"] != st.session_state["my_id"]:
-        if mailbox["timestamp"] > st.session_state["last_heard_ts"]:
-            
-            st.warning("🆕 相手からの新着メッセージを受信")
-            st.audio(mailbox["audio_bytes"], format="audio/wav", autoplay=True)
-            
-            # 既読にする
-            st.session_state["last_heard_ts"] = mailbox["timestamp"]
-        else:
-            st.write("💤 新着なし")
+if os.path.exists(SAVE_FILE) and os.path.exists("sender_id.txt"):
+    mtime = os.path.getmtime(SAVE_FILE)
+    
+    with open("sender_id.txt", "r") as f:
+        current_sender = f.read()
+
+    # 「他人が送った」かつ「まだ聞いていない新着」なら再生
+    if current_sender != st.session_state["my_id"] and mtime > st.session_state["last_check"]:
+        st.warning("🆕 相手からの声を検知！")
+        
+        # ファイルを読み込んで再生
+        with open(SAVE_FILE, "rb") as f:
+            audio_bytes = f.read()
+        st.audio(audio_bytes, format="audio/wav", autoplay=True)
+        
+        st.session_state["last_check"] = mtime
     else:
-        st.write("📤 送信済み（相手の受信待ち）")
+        st.write("💤 新着を待っています...")
 else:
-    st.write("💤 メッセージを待っています...")
+    st.write("準備中：まだ誰も送信していません")
 
-# --- 3. 自動更新（点滅を抑える） ---
+# --- 3. 無点滅更新（JavaScript） ---
 st.components.v1.html(
     """
     <script>
