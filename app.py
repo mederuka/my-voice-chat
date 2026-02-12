@@ -1,28 +1,39 @@
 # -*- coding: utf-8 -*-
 import streamlit as st
-from streamlit_webrtc import webrtc_streamer, WebRtcMode
+import os
+import time
 
-st.set_page_config(page_title="P2P Connection Test")
-st.title("Step 1: 通信の開通テスト")
+st.title("原始的トランシーバー (100%繋がる版)")
 
-# GoogleのSTUNサーバーを最大数指定して、接続経路をこじ開けます
-RTC_CONFIG = {
-    "iceServers": [
-        {"urls": ["stun:stun.l.google.com:19302"]},
-        {"urls": ["stun:stun1.l.google.com:19302"]},
-        {"urls": ["stun:stun2.l.google.com:19302"]},
-        {"urls": ["stun:stun3.l.google.com:19302"]},
-        {"urls": ["stun:stun4.l.google.com:19302"]},
-    ]
-}
+# 音声ファイルの保存場所
+VOICE_FILE = "shared_voice.wav"
 
-webrtc_ctx = webrtc_streamer(
-    key="p2p-test-v14",
-    mode=WebRtcMode.SENDRECV,
-    rtc_configuration=RTC_CONFIG,
-    media_stream_constraints={"audio": True, "video": False},
-    async_processing=True,
-)
+st.info("この方式なら、ネットの制限に関係なく相手に声が届きます。")
 
-if webrtc_ctx.state.playing:
-    st.success("✅ マイク起動成功。相手も同じページでStartを押してください。")
+# --- 1. 送信機能 ---
+st.subheader("1. 声を送る")
+audio_value = st.audio_input("マイクボタンを押して喋ってください")
+
+if audio_value:
+    # 録音されたデータを保存
+    with open(VOICE_FILE, "wb") as f:
+        f.write(audio_value.getbuffer())
+    st.success("送信完了！相手の画面にあなたの声が届きます。")
+
+st.divider()
+
+# --- 2. 受信機能 ---
+st.subheader("2. 相手の声を聞く")
+if os.path.exists(VOICE_FILE):
+    st.write("最新の受信ボイス:")
+    st.audio(VOICE_FILE)
+    
+    # 最終更新時間を確認
+    mtime = time.ctime(os.path.getmtime(VOICE_FILE))
+    st.caption(f"更新時刻: {mtime}")
+else:
+    st.write("まだメッセージはありません。")
+
+# 自動更新ボタン
+if st.button("最新の声をチェック"):
+    st.rerun()
